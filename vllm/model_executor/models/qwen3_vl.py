@@ -775,7 +775,11 @@ class Qwen3_VisionTransformer(nn.Module):
         # Keep max_seqlen on CPU: attention wrappers call .item() on it,
         # and having it on GPU would capture a wasteful D2H copy in CUDA
         # graphs without changing behavior (the scalar is baked at capture).
-        metadata["max_seqlen"] = torch.tensor(max_seqlen_val, dtype=torch.int32)
+        metadata["max_seqlen"] = torch.tensor(
+            max_seqlen_val,
+            dtype=torch.int32,
+            device=device,
+        )
 
         # Recompute cu_seqlens (backend-specific transformation)
         metadata["cu_seqlens"] = MMEncoderAttention.maybe_recompute_cu_seqlens(
@@ -792,19 +796,11 @@ class Qwen3_VisionTransformer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        grid_thw: torch.Tensor | list[list[int]],
         *,
-        encoder_metadata: dict[str, torch.Tensor] | None = None,
+        encoder_metadata: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         hidden_states = x.to(device=self.device, dtype=self.dtype, non_blocking=True)
         hidden_states = self.patch_embed(hidden_states)
-
-        if encoder_metadata is None:
-            if isinstance(grid_thw, list):
-                grid_thw_list = grid_thw
-            else:
-                grid_thw_list = grid_thw.tolist()
-            encoder_metadata = self.prepare_encoder_metadata(grid_thw_list)
 
         pos_embeds = encoder_metadata["pos_embeds"]
         hidden_states = hidden_states + pos_embeds
@@ -2110,7 +2106,13 @@ class Qwen3VLForConditionalGeneration(
                     self.visual, pixel_values, grid_thw.tolist(), rope_type="rope_3d"
                 )
             else:
-                image_embeds = self.visual(pixel_values, grid_thw=grid_thw)
+                encoder_metadata = self.visual.prepare_encoder_metadata(
+                    grid_thw.tolist(),
+                )
+                image_embeds = self.visual(
+                    pixel_values,
+                    encoder_metadata=encoder_metadata,
+                )
 
         # Split concatenated embeddings for each image item.
         merge_size = self.visual.spatial_merge_size
@@ -2135,7 +2137,13 @@ class Qwen3VLForConditionalGeneration(
                     self.visual, pixel_values_videos, grid_thw_list, rope_type="rope_3d"
                 )
             else:
-                video_embeds = self.visual(pixel_values_videos, grid_thw=grid_thw)
+                encoder_metadata = self.visual.prepare_encoder_metadata(
+                    grid_thw.tolist()
+                )
+                video_embeds = self.visual(
+                    pixel_values_videos,
+                    encoder_metadata=encoder_metadata,
+                )
 
         # Split concatenated embeddings for each video item.
         merge_size = self.visual.spatial_merge_size
